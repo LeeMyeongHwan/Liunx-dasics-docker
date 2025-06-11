@@ -1,0 +1,10 @@
+파일위치
+cd arrival-status1
+삭제
+docker rm -f arrival-status1
+docker rmi arrival-status1
+빌드
+docker build -t arrival-status1 .
+docker run -d -p 8080:80 --name arrival-status1 arrival-status1
+해당 링크를 통해 들어갈것
+http://localhost:8080

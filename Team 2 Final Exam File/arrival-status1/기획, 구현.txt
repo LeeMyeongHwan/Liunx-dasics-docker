@@ -1,0 +1,105 @@
+기획
+사용자에게 실질적으로 도움이 되는 실시간 데이터를 찾아 보았습니다.
+예를 들어 입국장 혼잡도 API는 
+1. 가족을 마중 나가야 할 때, 혼잡도를 미리 확인해 이동 시간을 조절
+2. 행자들이 도착 후 출국 소요 시간 예측에 도움
+3. 항 운영자나 안내 인력이 실시간 상황을 모니터링하는 데도 활용 가능
+이러한 상황에서 유용하게 쓰일 수 있다고 생각해 이 API을 선정했습니다. 
+
+구현설명
+update_html.sh
+입국장 혼잡도 API를 호출하고, HTML 테이블을 생성해 index.html로 저장하며, 기존 파일은 백업하는 스크립트입니다.
+
+SERVICE_KEY="..."      # 공공데이터 API 키
+TERM_LIST="T1 T2"      # 조회할 터미널 리스트
+OUTPUT_FILE="/usr/share/nginx/html/index.html"
+사용할 API 키, 터미널 리스트, 출력 파일 경로 설정
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+BACKUP_DIR="/usr/share/nginx/html/backups"
+mkdir -p "$BACKUP_DIR"
+index.html과 backups/ 폴더가 없으면 자동 생성
+
+파일 백업
+if [ -f "$OUTPUT_FILE" ]; then
+  cp "$OUTPUT_FILE" "$BACKUP_DIR/index_$(date +%Y%m%d_%H%M%S).html"
+fi
+index.html이 존재하면 백업 디렉토리에 타임스탬프 파일로 저장
+
+ HTML
+NOW=$(date "+%Y-%m-%d %H:%M:%S")
+echo "updated at $(date)" >> /usr/share/nginx/html/cron.log
+현재 시각을 변수에 저장, 로그로 남김
+
+cat <<EOF > "$OUTPUT_FILE"
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>입국장 혼잡도</title>
+  <style>
+    body { font-family: sans-serif; }
+    p { margin: 0.5em 0; }
+    .notice { font-size: 1em; color: gray; }
+  </style>
+</head>
+<body>
+  <h1>입국장 혼잡도 현황</h1>
+  <p class="notice">
+  📁 <a href="/backups/">이전 백업 목록 보기</a>
+  </p>
+  <table border="1" cellpadding="5" cellspacing="0">
+    <tr>
+      <th>터미널</th><th>입국장</th><th>편명</th><th>도착예정</th>
+      <th>도착실제</th><th>내국인</th><th>외국인</th>
+    </tr>
+EOF
+HTML 틀, 백업 보기 링크도 HTML도 포함
+
+API 호출 및 데이터 파싱
+for T in $TERM_LIST; do
+    curl -s "http://apis.data.go.kr/...&terno=${T}" > /tmp/res.xml
+터미널(T1, T2) 별로 API 호출 → 응답을 res.xml로 저장
+
+    COUNT=$(xmllint --xpath 'count(//item)' /tmp/res.xml)
+    i=1
+    while [ $i -le $COUNT ]; do
+XML 내 <item> 요소 개수를 세고 반복할 준비
+
+XML 항목 추출 및 HTML 행 작성
+        ENTRYGATE=$(xmllint --xpath "string(//item[$i]/entrygate)" /tmp/res.xml)
+        FLIGHTID=$(xmllint --xpath "string(//item[$i]/flightid)" /tmp/res.xml)
+        SCHEDULE=$(xmllint --xpath "string(//item[$i]/scheduletime)" /tmp/res.xml)
+        ESTIMATE=$(xmllint --xpath "string(//item[$i]/estimatedtime)" /tmp/res.xml)
+        KOREAN=$(xmllint --xpath "string(//item[$i]/korean)" /tmp/res.xml)
+        FOREIGNER=$(xmllint --xpath "string(//item[$i]/foreigner)" /tmp/res.xml)
+xmllint를 사용해 XML에서 데이터 추출
+//item[i]/... 형태로 각각 필요한 정보를 읽어옴
+
+        echo "    <tr><td>$T</td><td>$ENTRYGATE</td><td>$FLIGHTID</td><td>$SCHEDULE</td><td>$ESTIMATE</td><td>$KOREAN</td><td>$FOREIGNER</td></tr>" >> "$OUTPUT_FILE"
+        i=$((i + 1))
+    done
+done
+추출한 데이터를 HTML 테이블 <tr> 형식으로 작성
+
+HTML 마무리 및 백업 반복
+cat <<EOF >> "$OUTPUT_FILE"
+  </table>
+  <p class="notice">
+    📁 <a href="/backups/">이전 백업 목록 보기</a>
+  </p>
+</body>
+</html>
+EOF
+백업 링크 한 번 더 출력 (위/아래 모두 있음)
+
+cp "$OUTPUT_FILE" "$BACKUP_DIR/index_$(date +%Y%m%d_%H%M%S).html"
+index.html 백업 (안전성 향상)
+
+nginx.conf
+/ → index.html
+/backups/ → /usr/share/nginx/html/backups에 접근 (autoindex 활성화)
+
+mycron
+* * * * * /usr/local/bin/update_html.sh
+위의 쉘 스크립트를 1분마다 자동 실행시킴
+
